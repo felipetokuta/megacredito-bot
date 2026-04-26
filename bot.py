@@ -9,18 +9,17 @@ import os, re, base64, requests
 from datetime import date, datetime
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 # ── Configurações ────────────────────────────────────────────────
 EVOLUTION_URL      = os.environ.get("EVOLUTION_URL", "https://evolution-api-production-ddb3.up.railway.app")
 EVOLUTION_KEY      = os.environ.get("EVOLUTION_KEY", "megacredito2025")
 INSTANCE           = os.environ.get("EVOLUTION_INSTANCE", "MegaCrédito")
 MEGACREDITO_URL    = os.environ.get("MEGACREDITO_URL", "https://wholesome-empathy-production-af46.up.railway.app")
-MEGACREDITO_KEY    = os.environ.get("MEGACREDITO_KEY", "megacredito2025")  # sua API key do sistema
-OWNER_NUMBER       = os.environ.get("OWNER_NUMBER", "8108071830883")     # número do Felipe com 55
-GEMINI_KEY         = os.environ.get("GEMINI_API_KEY", "")
-BOT_SECRET         = os.environ.get("BOT_SECRET", "megabot2025")           # segredo do webhook
+MEGACREDITO_KEY    = os.environ.get("MEGACREDITO_KEY", "megacredito2025")
+OWNER_NUMBER       = os.environ.get("OWNER_NUMBER", "8108071830883")
+OPENAI_KEY         = os.environ.get("OPENAI_API_KEY", "")   # ← cole sua key aqui ou no Railway
+BOT_SECRET         = os.environ.get("BOT_SECRET", "megabot2025")
 
 app = Flask(__name__)
 
@@ -120,7 +119,6 @@ def registrar_pagamento_retorno(cliente_id: int, valor: float, obs: str = ""):
 def buscar_cliente_por_numero(numero: str):
     """Busca cliente pelo número de WhatsApp."""
     numero_limpo = re.sub(r'\D', '', numero)
-    # Remove o 55 do início para comparar
     if numero_limpo.startswith('55') and len(numero_limpo) > 11:
         numero_limpo = numero_limpo[2:]
     try:
@@ -135,38 +133,56 @@ def buscar_cliente_por_numero(numero: str):
         print(f"[BOT] Erro ao buscar cliente: {e}")
     return None
 
-# ── Leitura de Comprovante com IA ────────────────────────────────
+# ── Leitura de Comprovante com GPT-4o ───────────────────────────
 
 def extrair_valor_comprovante(imagem_bytes: bytes, mime: str = "image/jpeg") -> float | None:
-    """Usa Gemini Vision para extrair o valor do comprovante (imagem ou PDF)."""
-    if not GEMINI_KEY:
-        print("[BOT] GEMINI_API_KEY não configurada")
+    """Usa GPT-4o Vision para extrair o valor do comprovante (imagem ou PDF)."""
+    if not OPENAI_KEY:
+        print("[BOT] OPENAI_API_KEY não configurada")
         return None
     try:
-        client = genai.Client(api_key=GEMINI_KEY)
+        client = OpenAI(api_key=OPENAI_KEY)
 
-        prompt = (
-            "Este é um comprovante de pagamento brasileiro. "
-            "Extraia APENAS o valor total transferido/pago em reais. "
-            "Responda SOMENTE com o número, sem R$, sem texto. "
-            "Use ponto como separador decimal. "
-            "Exemplo: 150.00"
+        # Converte bytes para base64
+        b64 = base64.b64encode(imagem_bytes).decode("utf-8")
+
+        # GPT-4o aceita imagens via base64; para PDF converte para imagem antes se necessário
+        # Aqui usamos image_url com data URI
+        data_uri = f"data:{mime};base64,{b64}"
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": data_uri, "detail": "low"},
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Este é um comprovante de pagamento brasileiro. "
+                                "Extraia APENAS o valor total transferido/pago em reais. "
+                                "Responda SOMENTE com o número, sem R$, sem texto. "
+                                "Use ponto como separador decimal. "
+                                "Exemplo: 150.00"
+                            ),
+                        },
+                    ],
+                }
+            ],
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[
-                types.Part.from_bytes(data=imagem_bytes, mime_type=mime),
-                prompt
-            ]
-        )
-
-        texto = response.text.strip()
+        texto = response.choices[0].message.content.strip()
         texto = texto.replace(',', '.').replace('R$', '').strip()
         valor = float(re.search(r'[\d.]+', texto).group())
         return valor
+
     except Exception as e:
-        print(f"[BOT] Erro ao extrair valor com Gemini: {e}")
+        print(f"[BOT] Erro ao extrair valor com GPT-4o: {e}")
         return None
 
 # ── Jobs Agendados ───────────────────────────────────────────────
@@ -179,10 +195,10 @@ def job_cobranca_18h():
     for c in inadimplentes:
         if not c.get('whatsapp'):
             continue
-        nome        = c['nome'].split()[0]  # primeiro nome
-        dias        = c['dias_atraso']
-        valor       = c['valor_atraso']
-        diarias     = c['diarias_pagas']
+        nome    = c['nome'].split()[0]
+        dias    = c['dias_atraso']
+        valor   = c['valor_atraso']
+        diarias = c['diarias_pagas']
         msg = (
             f"Olá *{nome}*! 👋\n\n"
             f"Passando para lembrar que você está com *{dias} dia(s) em atraso* "
@@ -199,16 +215,15 @@ def job_cobranca_18h():
 def job_resumo_23h():
     """Envia resumo do dia para o owner às 23h."""
     print(f"[BOT] {datetime.now()} — Enviando resumo para owner")
-    stats       = get_stats()
+    stats         = get_stats()
     inadimplentes = get_inadimplentes()
-    hoje        = date.today().strftime('%d/%m/%Y')
-    total_hoje  = stats.get('total_hoje', 0)
-    total_mes   = stats.get('total_mes', 0)
-    em_atraso   = stats.get('em_atraso', 0)
+    hoje          = date.today().strftime('%d/%m/%Y')
+    total_hoje    = stats.get('total_hoje', 0)
+    total_mes     = stats.get('total_mes', 0)
+    em_atraso     = stats.get('em_atraso', 0)
 
-    # Monta lista de inadimplentes
     lista_inad = ""
-    for c in inadimplentes[:15]:  # máximo 15 para não ficar gigante
+    for c in inadimplentes[:15]:
         lista_inad += f"  • {c['nome']} — {c['dias_atraso']}d — R$ {c['valor_atraso']:.2f}\n"
     if not lista_inad:
         lista_inad = "  ✅ Nenhum inadimplente hoje!\n"
@@ -231,15 +246,13 @@ def job_resumo_23h():
 def webhook():
     data = request.json or {}
 
-    # Verifica se é mensagem recebida
     evento = data.get('event', '')
     if evento not in ('messages.upsert', 'message.received'):
         return jsonify(ok=True)
 
-    msg_data = data.get('data', {})
-    key      = msg_data.get('key', {})
+    msg_data   = data.get('data', {})
+    key        = msg_data.get('key', {})
 
-    # Ignora mensagens enviadas pelo próprio bot
     if key.get('fromMe'):
         return jsonify(ok=True)
 
@@ -248,16 +261,14 @@ def webhook():
     message    = msg_data.get('message', {})
     message_id = key.get('id', '')
 
-    # ── Detecta tipo de mensagem ──
     tem_imagem = 'imageMessage' in message
     tem_pdf    = ('documentMessage' in message and
                   'pdf' in (message.get('documentMessage', {}).get('mimetype', '')))
     tem_audio  = 'audioMessage' in message
 
     if tem_imagem or tem_pdf:
-        # Tenta ler como comprovante
-        mime   = "image/jpeg" if tem_imagem else "application/pdf"
-        midia  = baixar_midia(message_id)
+        mime  = "image/jpeg" if tem_imagem else "application/pdf"
+        midia = baixar_midia(message_id)
         if not midia:
             enviar_texto(numero, "❌ Não consegui baixar o arquivo. Tente novamente.")
             return jsonify(ok=True)
@@ -267,7 +278,6 @@ def webhook():
             enviar_texto(numero, "❌ Não consegui ler o valor do comprovante. Manda uma foto mais nítida.")
             return jsonify(ok=True)
 
-        # Busca o cliente pelo número
         cliente = buscar_cliente_por_numero(numero)
         if not cliente:
             enviar_texto(numero,
@@ -276,13 +286,12 @@ def webhook():
             )
             return jsonify(ok=True)
 
-        # Registra o pagamento
         resultado = registrar_pagamento_retorno(cliente['id'], valor, obs="Comprovante via WhatsApp")
         nome = cliente['nome'].split()[0]
         if resultado:
-            diarias_pagas  = resultado.get('diarias_pagas', cliente['diarias_pagas'])
-            diarias_novas  = resultado.get('diarias_novas', 0)
-            restantes      = 20 - diarias_pagas
+            diarias_pagas = resultado.get('diarias_pagas', cliente['diarias_pagas'])
+            diarias_novas = resultado.get('diarias_novas', 0)
+            restantes     = 20 - diarias_pagas
 
             if diarias_pagas >= 20:
                 msg_parcelas = f"🎉 *Parabéns! Você completou todas as 20 diárias!*\nAguarde a renovação do contrato."
@@ -301,7 +310,6 @@ def webhook():
                 f"{msg_parcelas}\n\n"
                 f"Obrigado! 🙏"
             )
-            # Avisa o owner também
             enviar_texto(OWNER_NUMBER,
                 f"💰 *Pagamento recebido!*\n"
                 f"Cliente: {cliente['nome']}\n"
@@ -319,7 +327,6 @@ def webhook():
         texto = (message.get('conversation') or
                  message.get('extendedTextMessage', {}).get('text', '')).lower().strip()
 
-        # Comandos básicos
         if any(p in texto for p in ['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite']):
             cliente = buscar_cliente_por_numero(numero)
             nome    = cliente['nome'].split()[0] if cliente else "cliente"
@@ -358,7 +365,6 @@ def webhook():
 
 @app.route('/disparar/cobranca', methods=['POST'])
 def disparar_cobranca():
-    """Dispara cobrança manualmente (protegido por secret)."""
     if request.headers.get('X-Secret') != BOT_SECRET:
         return jsonify(erro="não autorizado"), 403
     job_cobranca_18h()
@@ -366,7 +372,6 @@ def disparar_cobranca():
 
 @app.route('/disparar/resumo', methods=['POST'])
 def disparar_resumo():
-    """Dispara resumo manualmente."""
     if request.headers.get('X-Secret') != BOT_SECRET:
         return jsonify(erro="não autorizado"), 403
     job_resumo_23h()
