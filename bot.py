@@ -9,7 +9,7 @@ import os, re, base64, requests
 from datetime import date, datetime
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
-import anthropic
+import google.generativeai as genai
 
 # ── Configurações ────────────────────────────────────────────────
 EVOLUTION_URL      = os.environ.get("EVOLUTION_URL", "https://evolution-api-production-ddb3.up.railway.app")
@@ -18,7 +18,7 @@ INSTANCE           = os.environ.get("EVOLUTION_INSTANCE", "MegaCrédito")
 MEGACREDITO_URL    = os.environ.get("MEGACREDITO_URL", "https://wholesome-empathy-production-af46.up.railway.app")
 MEGACREDITO_KEY    = os.environ.get("MEGACREDITO_KEY", "megacredito2025")  # sua API key do sistema
 OWNER_NUMBER       = os.environ.get("OWNER_NUMBER", "558108071830883")     # número do Felipe com 55
-ANTHROPIC_KEY      = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_KEY         = os.environ.get("GEMINI_API_KEY", "")
 BOT_SECRET         = os.environ.get("BOT_SECRET", "megabot2025")           # segredo do webhook
 
 app = Flask(__name__)
@@ -122,42 +122,34 @@ def buscar_cliente_por_numero(numero: str):
 # ── Leitura de Comprovante com IA ────────────────────────────────
 
 def extrair_valor_comprovante(imagem_bytes: bytes, mime: str = "image/jpeg") -> float | None:
-    """Usa Claude Vision para extrair o valor do comprovante."""
-    if not ANTHROPIC_KEY:
-        print("[BOT] ANTHROPIC_API_KEY não configurada")
+    """Usa Gemini Vision para extrair o valor do comprovante (imagem ou PDF)."""
+    if not GEMINI_KEY:
+        print("[BOT] GEMINI_API_KEY não configurada")
         return None
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-        b64 = base64.b64encode(imagem_bytes).decode()
-        msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=256,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": mime, "data": b64}
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Este é um comprovante de pagamento brasileiro. "
-                            "Extraia APENAS o valor total transferido/pago em reais. "
-                            "Responda SOMENTE com o número, sem R$, sem texto. "
-                            "Exemplo: 150.00"
-                        )
-                    }
-                ]
-            }]
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        # Monta a parte da mídia
+        midia_part = {"mime_type": mime, "data": imagem_bytes}
+
+        prompt = (
+            "Este é um comprovante de pagamento brasileiro. "
+            "Extraia APENAS o valor total transferido/pago em reais. "
+            "Responda SOMENTE com o número, sem R$, sem texto. "
+            "Use ponto como separador decimal. "
+            "Exemplo: 150.00"
         )
-        texto = msg.content[0].text.strip()
+
+        response = model.generate_content([midia_part, prompt])
+        texto = response.text.strip()
+
         # Limpa e converte
         texto = texto.replace(',', '.').replace('R$', '').strip()
         valor = float(re.search(r'[\d.]+', texto).group())
         return valor
     except Exception as e:
-        print(f"[BOT] Erro ao extrair valor: {e}")
+        print(f"[BOT] Erro ao extrair valor com Gemini: {e}")
         return None
 
 # ── Jobs Agendados ───────────────────────────────────────────────
