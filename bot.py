@@ -247,6 +247,8 @@ def webhook():
     data = request.json or {}
 
     evento = data.get('event', '')
+    print(f"[BOT] Webhook recebido — evento: {evento}")
+
     if evento not in ('messages.upsert', 'message.received'):
         return jsonify(ok=True)
 
@@ -261,10 +263,15 @@ def webhook():
     message    = msg_data.get('message', {})
     message_id = key.get('id', '')
 
+    print(f"[BOT] Mensagem de: {numero}")
+    print(f"[BOT] Chaves da mensagem: {list(message.keys())}")
+
     tem_imagem = 'imageMessage' in message
     tem_pdf    = ('documentMessage' in message and
                   'pdf' in (message.get('documentMessage', {}).get('mimetype', '')))
     tem_audio  = 'audioMessage' in message
+
+    print(f"[BOT] tem_imagem={tem_imagem} | tem_pdf={tem_pdf} | tem_audio={tem_audio}")
 
     if tem_imagem or tem_pdf:
         mime  = "image/jpeg" if tem_imagem else "application/pdf"
