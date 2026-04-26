@@ -118,10 +118,16 @@ def extrair_valor_comprovante(imagem_bytes: bytes, mime: str = "image/jpeg") -> 
                 "content": [
                     {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
                     {"type": "text", "text": (
-                        "Este é um comprovante de pagamento brasileiro. "
-                        "Extraia APENAS o valor total transferido/pago em reais. "
-                        "Responda SOMENTE com o número, sem R$, sem texto. "
-                        "Use ponto como separador decimal. Exemplo: 150.00"
+                        "Este é um comprovante de pagamento/transferência brasileiro (PIX, TED, DOC ou boleto).\n"
+                        "Sua tarefa: encontrar o VALOR DA TRANSFERÊNCIA ou VALOR PAGO.\n\n"
+                        "REGRAS IMPORTANTES:\n"
+                        "- Procure por campos como Valor, Valor da transferência, Valor pago, Quantia\n"
+                        "- IGNORE completamente: números de agência, conta, CPF, CNPJ, datas e códigos\n"
+                        "- O valor geralmente aparece em destaque, precedido de R$\n"
+                        "- Se houver Valor e Tarifa separados, retorne apenas o Valor principal\n\n"
+                        "Responda SOMENTE com o número em reais, sem R$, sem texto.\n"
+                        "Use ponto como separador decimal.\n"
+                        "Exemplos de resposta correta: 4.00 / 150.50 / 1200.00"
                     )},
                 ],
             }],
