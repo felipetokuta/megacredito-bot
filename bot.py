@@ -201,12 +201,15 @@ def pdf_para_imagem(pdf_bytes: bytes) -> bytes | None:
     try:
         from pdf2image import convert_from_bytes
         from io import BytesIO
-        paginas = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=1)
+        paginas = convert_from_bytes(pdf_bytes, dpi=150, first_page=1, last_page=1)
         if not paginas:
             return None
         buf = BytesIO()
-        paginas[0].save(buf, format='JPEG', quality=90)
+        paginas[0].save(buf, format='JPEG', quality=85)
         return buf.getvalue()
+    except ImportError:
+        print("[BOT] pdf2image não disponível — tentando via pypdf texto")
+        return None
     except Exception as e:
         print(f"[BOT] Erro ao converter PDF para imagem: {e}")
         return None
@@ -899,11 +902,17 @@ def health():
 
 # ── Inicialização ────────────────────────────────────────────────
 
-scheduler = BackgroundScheduler(timezone="America/Fortaleza")
-scheduler.add_job(job_cobranca_18h, 'cron', hour=18, minute=0)
-scheduler.add_job(job_resumo_23h,   'cron', hour=23, minute=0)
-scheduler.add_job(job_backup_2350,  'cron', hour=23, minute=50)
-scheduler.start()
+try:
+    scheduler = BackgroundScheduler(timezone="America/Fortaleza")
+    scheduler.add_job(job_cobranca_18h, 'cron', hour=18, minute=0)
+    scheduler.add_job(job_resumo_23h,   'cron', hour=23, minute=0)
+    scheduler.add_job(job_backup_2350,  'cron', hour=23, minute=50)
+    scheduler.start()
+    print("[BOT] Scheduler iniciado com sucesso")
+except Exception as e:
+    print(f"[BOT] ERRO ao iniciar scheduler: {e}")
+
+print(f"[BOT] App pronto — EVOLUTION_URL={EVOLUTION_URL} MEGACREDITO_URL={MEGACREDITO_URL}")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
