@@ -170,6 +170,8 @@ def upsert_clientes(clientes: list) -> dict:
     return {}
 
 
+def reverter_pagamento(pag_id: int) -> bool:
+    """Reverte um pagamento pelo ID — usado no antifraude."""
     try:
         r = requests.post(f"{MEGACREDITO_URL}/api/reverter/{pag_id}",
                           headers=_api_headers(), timeout=10)
@@ -512,16 +514,6 @@ def processar_mensagem(data: dict):
     numero     = remoteJid.replace('@s.whatsapp.net', '')
     message    = msg_data.get('message', {})
     message_id = key.get('id', '')
-
-    print(f"[BOT] De: {numero} | Chaves: {list(message.keys())}")
-
-    tem_imagem = 'imageMessage' in message
-    tem_pdf    = ('documentMessage' in message and
-                  'pdf' in (message.get('documentMessage', {}).get('mimetype', '')))
-
-    numero_limpo = re.sub(r'\D', '', numero)
-    owner_limpo  = re.sub(r'\D', '', OWNER_NUMBER)
-    is_owner     = numero_limpo.endswith(owner_limpo[-8:])
 
     print(f"[BOT] De: {numero} | Chaves: {list(message.keys())}")
 
