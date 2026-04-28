@@ -127,10 +127,12 @@ def pagou_hoje(cliente_id: int) -> bool:
     return False
 
 def verificar_duplicado_api(hash_arquivo: str, codigo_tx: str) -> tuple[bool, str]:
-    """Consulta a API para verificar duplicata no banco (persistente)."""
+    """Consulta a API para verificar duplicata pelo codigo_tx (ID único do PIX)."""
+    if not codigo_tx:
+        return False, ''
     try:
         r = requests.post(f"{MEGACREDITO_URL}/api/verificar_comprovante",
-                          json={"hash_arquivo": hash_arquivo, "codigo_tx": codigo_tx},
+                          json={"codigo_tx": codigo_tx},
                           headers=_api_headers(), timeout=10)
         if r.ok:
             data = r.json()
@@ -516,79 +518,78 @@ def webhook():
         mime  = "image/jpeg" if tem_imagem else "application/pdf"
         midia = baixar_midia(message_id)
         if not midia:
-            enviar_texto(numero, "❌ Não consegui baixar o arquivo. Tente novamente.")
-            enviar_alerta_admins(f"⚠️ Falha ao baixar comprovante de +{numero}. Verificar manualmente.")
+            enviar_texto(numero, "❌ Não consegui baixar o arquivo. Tente reenviar.")
             return jsonify(ok=True)
 
-        # ── 1. Hash SHA-256 para detectar arquivo duplicado ──────
-        hash_arquivo = hashlib.sha256(midia).hexdigest()
-
-        # ── 2. Extração unificada via GPT-4o ─────────────────────
-        dados = extrair_dados_comprovante(midia, mime)
-        if not dados or not dados.get('valor'):
-            enviar_texto(numero, "❌ Não consegui ler o comprovante. Manda uma foto mais nítida.")
-            enviar_alerta_admins(
-                f"⚠️ *Comprovante ilegível*\n"
-                f"Número: +{numero}\n"
-                f"Não foi possível extrair os dados. Verificar manualmente."
-            )
-            return jsonify(ok=True)
-
-        valor         = float(dados['valor'])
-        hora          = dados.get('hora')
-        nome_remetente = dados.get('nome_remetente') or ''
-        codigo_tx     = dados.get('codigo_tx') or ''
-
-        # ── 3. Verificar duplicata no banco (persistente) ─────────
-        duplicado, motivo_dup = verificar_duplicado_api(hash_arquivo, codigo_tx)
-        if duplicado:
-            enviar_texto(numero, "❌ Este comprovante já foi registrado anteriormente. Não é possível registrar novamente.")
-            enviar_alerta_admins(
-                f"🚨 *Comprovante DUPLICADO bloqueado!*\n"
-                f"Número: +{numero}\n"
-                f"Valor: R$ {valor:.2f}\n"
-                f"Motivo: {motivo_dup}\n"
-                f"Hora: {hora or '??:??'}"
-            )
-            return jsonify(ok=True)
-
-        # ── 4. Buscar cliente pelo número ─────────────────────────
+        # ── 1. Buscar cliente pelo número (8 últimos dígitos) ─────
         cliente = buscar_cliente_por_numero(numero)
         if not cliente:
             enviar_texto(numero,
-                f"✅ Comprovante recebido! Valor: R$ {valor:.2f}\n\n"
-                f"⚠️ Não encontrei seu cadastro. Fale com o atendente."
+                "⚠️ Comprovante recebido, mas seu número não está cadastrado.\n"
+                "Fale com o atendente para regularizar. 📞"
             )
             enviar_alerta_admins(
-                f"⚠️ *Comprovante sem cadastro*\n"
+                f"⚠️ *Comprovante de número não cadastrado*\n"
                 f"Número: +{numero}\n"
-                f"Valor: R$ {valor:.2f}\n"
-                f"Remetente: {nome_remetente or 'não identificado'}\n"
-                f"Verificar manualmente."
+                f"Hora: {datetime.now().strftime('%H:%M')}"
             )
             return jsonify(ok=True)
 
-        # ── 5. Validar nome do remetente ──────────────────────────
-        if nome_remetente:
-            primeiro_cadastro   = cliente['nome'].split()[0].lower()
-            primeiro_remetente  = nome_remetente.split()[0].lower()
-            if primeiro_remetente != primeiro_cadastro:
+        # ── 2. Extração via GPT-4o ────────────────────────────────
+        dados = extrair_dados_comprovante(midia, mime)
+        if not dados or not dados.get('valor'):
+            # GPT não conseguiu ler — avisa owner e pede reenvio
+            enviar_texto(numero,
+                "⚠️ Não consegui ler o comprovante automaticamente.\n"
+                "O atendente foi avisado e vai confirmar em breve! 👍"
+            )
+            enviar_alerta_admins(
+                f"📎 *Comprovante para revisão manual*\n"
+                f"Cliente: *{cliente['nome']}*\n"
+                f"Número: +{numero}\n"
+                f"Hora: {datetime.now().strftime('%H:%M')}\n"
+                f"⚠️ Leitura automática falhou — confirme e registre manualmente."
+            )
+            return jsonify(ok=True)
+
+        valor          = float(dados['valor'])
+        hora           = dados.get('hora')
+        nome_remetente = dados.get('nome_remetente') or ''
+        codigo_tx      = dados.get('codigo_tx') or ''
+        hash_arquivo   = hashlib.sha256(midia).hexdigest()
+
+        # ── 3. Verificar duplicata pelo codigo_tx (ID único do PIX) ─
+        if codigo_tx:
+            duplicado, motivo_dup = verificar_duplicado_api('', codigo_tx)
+            if duplicado:
                 enviar_texto(numero,
-                    f"⚠️ O nome no comprovante (*{nome_remetente}*) não corresponde ao seu cadastro.\n"
-                    f"Entre em contato com o atendente para verificar."
+                    "❌ Este comprovante já foi registrado anteriormente.\n"
+                    "Se achar que é um erro, fale com o atendente."
                 )
                 enviar_alerta_admins(
-                    f"🚨 *Nome divergente no comprovante!*\n"
-                    f"Cliente cadastrado: *{cliente['nome']}*\n"
-                    f"Nome no comprovante: *{nome_remetente}*\n"
+                    f"🚨 *Comprovante DUPLICADO bloqueado!*\n"
+                    f"Cliente: *{cliente['nome']}*\n"
                     f"Número: +{numero}\n"
                     f"Valor: R$ {valor:.2f}\n"
-                    f"Verifique manualmente antes de liberar."
+                    f"TX ID: {codigo_tx}"
                 )
                 return jsonify(ok=True)
 
-        # ── 6. Registrar pagamento ────────────────────────────────
-        obs = f"Remetente: {nome_remetente} | TX: {codigo_tx} | Hash: {hash_arquivo[:12]}..."
+        # ── 4. Validar primeiro nome (aviso ao owner, não bloqueia) ─
+        if nome_remetente:
+            primeiro_cadastro  = cliente['nome'].split()[0].lower()
+            primeiro_remetente = nome_remetente.split()[0].lower()
+            if primeiro_remetente != primeiro_cadastro:
+                enviar_alerta_admins(
+                    f"⚠️ *Nome diferente no comprovante — verifique*\n"
+                    f"Cliente cadastrado: *{cliente['nome']}*\n"
+                    f"Nome no comprovante: *{nome_remetente}*\n"
+                    f"Número: +{numero} | Valor: R$ {valor:.2f}\n"
+                    f"Pagamento registrado normalmente — confirme se está certo."
+                )
+
+        # ── 5. Registrar pagamento ────────────────────────────────
+        obs = f"TX: {codigo_tx} | Remetente: {nome_remetente or 'n/i'} | Hash: {hash_arquivo[:12]}..."
         resultado = registrar_pagamento(cliente['id'], valor, obs, hash_arquivo, codigo_tx)
         nome = cliente['nome'].split()[0]
 
