@@ -895,7 +895,7 @@ def health():
 # ── Inicialização ────────────────────────────────────────────────
 
 try:
-    scheduler = BackgroundScheduler(timezone="America/Fortaleza")
+    scheduler = BackgroundScheduler(timezone="America/Manaus")
     scheduler.add_job(job_cobranca_18h, 'cron', hour=18, minute=0)
     scheduler.add_job(job_resumo_23h,   'cron', hour=23, minute=0)
     scheduler.add_job(job_backup_2350,  'cron', hour=23, minute=50)
